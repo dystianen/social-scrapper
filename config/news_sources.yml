@@ -1,0 +1,169 @@
+# config/news_sources.yml
+# Fokus: Semua berita yang mengandung "Solusiku"
+
+# ── Keyword Rules ──
+# wajib   = HARUS ada di artikel
+# konteks = kata pendamping untuk memperkaya search, tapi tidak wajib
+keywords:
+  wajib:
+    - "solusiku"
+    - "solusi-ku"
+    - "solusi ku"
+    - "pt anugerah digital indonesia"
+  konteks:
+    - "pinjol"
+    - "pinjaman online"
+    - "fintech"
+    - "OJK"
+    - "otoritas jasa keuangan"
+    - "penagihan"
+    - "debt collector"
+    - "pelanggaran"
+    - "pengaduan"
+    - "konsumen"
+    - "bermasalah"
+    - "ilegal"
+    - "sanksi"
+    - "izin"
+    - "terdaftar"
+    - "bunga"
+    - "tagihan"
+
+# Search queries — semua mengandung "Solusiku"
+search_queries:
+  - "Solusiku"
+  - "Solusiku pinjol"
+  - "Solusiku OJK"
+  - "Solusiku penagihan"
+  - "Solusiku fintech"
+  - "Solusiku pelanggaran"
+  - "Solusiku pengaduan konsumen"
+  - "Solusiku debt collector"
+  - "Solusiku bermasalah"
+  - "PT Anugerah Digital Indonesia"
+
+sources:
+  - name: "detik"
+    base_url: "https://www.detik.com"
+    selectors:
+      article_links: "article a[href], .list-content__item a[href], .media__link, a[href*='/d-']"
+      title: "h1.detail__title, h1"
+      content: ".detail__body-text, .itp_bodycontent, .detail-text"
+      date: ".detail__date, .date"
+      author: ".detail__author, .author"
+      tags: ".detail__tag a, .tag a"
+    search_urls:
+      - "https://www.detik.com/search/searchall?query=Solusiku&siteid=2"
+      - "https://www.detik.com/search/searchall?query=Solusiku+pinjol&siteid=2"
+      - "https://www.detik.com/search/searchall?query=Solusiku+OJK&siteid=2"
+      - "https://www.detik.com/search/searchall?query=Solusiku+penagihan&siteid=2"
+      - "https://www.detik.com/search/searchall?query=PT+Anugerah+Digital+Indonesia&siteid=2"
+    categories: []
+
+  - name: "kompas"
+    base_url: "https://www.kompas.com"
+    selectors:
+      article_links: "a[href*='/read/'], .article__list__link"
+      title: "h1.read__title"
+      content: ".read__content"
+      date: ".read__time"
+      author: ".read__author"
+      tags: ".read__tag a"
+    search_urls:
+      - "https://www.kompas.com/search?q=Solusiku"
+      - "https://www.kompas.com/search?q=Solusiku+pinjol"
+      - "https://www.kompas.com/search?q=Solusiku+OJK"
+      - "https://www.kompas.com/search?q=PT+Anugerah+Digital+Indonesia"
+    categories: []
+
+  - name: "cnnindonesia"
+    base_url: "https://www.cnnindonesia.com"
+    selectors:
+      article_links: "article a[href], .list a[href]"
+      title: "h1.detail-text, h1"
+      content: ".detail-text"
+      date: ".detail-date, .date, time"
+      author: ".detail-author, .author"
+    search_urls:
+      - "https://www.cnnindonesia.com/search?query=Solusiku"
+      - "https://www.cnnindonesia.com/search?query=Solusiku+pinjol"
+      - "https://www.cnnindonesia.com/search?query=Solusiku+OJK"
+    categories: []
+
+  - name: "tempo"
+    base_url: "https://www.tempo.co"
+    selectors:
+      article_links: "article a[href], a[href*='tempo.co']"
+      title: "h1"
+      content: ".detail-konten, .article-content"
+      date: ".date, time"
+      author: ".author"
+    search_urls:
+      - "https://www.google.com/search?q=Solusiku+site:tempo.co&tbm=nws&gl=id&hl=id"
+      - "https://www.google.com/search?q=Solusiku+pinjol+site:tempo.co&tbm=nws&gl=id&hl=id"
+    categories: []
+
+  - name: "liputan6"
+    base_url: "https://www.liputan6.com"
+    selectors:
+      article_links: "article a[href], a[href*='liputan6.com']"
+      title: "h1"
+      content: ".article-content-body, .read__content"
+      date: ".read__time, time"
+      author: ".read__author"
+    search_urls:
+      - "https://www.google.com/search?q=Solusiku+site:liputan6.com&tbm=nws&gl=id&hl=id"
+      - "https://www.google.com/search?q=Solusiku+pinjol+site:liputan6.com&tbm=nws&gl=id&hl=id"
+    categories: []
+
+  - name: "okezone"
+    base_url: "https://www.okezone.com"
+    selectors:
+      article_links: "article a[href], a[href*='okezone.com']"
+      title: "h1"
+      content: ".read"
+      date: ".date, time"
+      author: ".author"
+    search_urls:
+      - "https://www.google.com/search?q=Solusiku+site:okezone.com&tbm=nws&gl=id&hl=id"
+    categories: []
+
+  - name: "suara"
+    base_url: "https://www.suara.com"
+    selectors:
+      article_links: "article a[href], a[href*='suara.com']"
+      title: "h1"
+      content: ".detail-body, .article-content"
+      date: ".date, time"
+      author: ".author"
+    search_urls:
+      - "https://www.google.com/search?q=Solusiku+site:suara.com&tbm=nws&gl=id&hl=id"
+    categories: []
+
+  - name: "tribunnews"
+    base_url: "https://www.tribunnews.com"
+    selectors:
+      article_links: "article a[href], a[href*='tribunnews.com']"
+      title: "h1"
+      content: ".txt-article"
+      date: ".date, time"
+      author: ".author"
+    search_urls:
+      - "https://www.google.com/search?q=Solusiku+site:tribunnews.com&tbm=nws&gl=id&hl=id"
+    categories: []
+
+  - name: "google_news"
+    base_url: "https://news.google.com"
+    selectors:
+      article_links: "a[href]"
+      title: "h1"
+      content: "article"
+      date: "time"
+      author: ""
+    search_urls:
+      - "https://www.google.com/search?q=Solusiku+berita&tbm=nws&gl=id&hl=id"
+      - "https://www.google.com/search?q=Solusiku+pinjol+berita&tbm=nws&gl=id&hl=id"
+      - "https://www.google.com/search?q=Solusiku+OJK+berita&tbm=nws&gl=id&hl=id"
+      - "https://www.google.com/search?q=%22Solusiku%22+penagihan&tbm=nws&gl=id&hl=id"
+      - "https://www.google.com/search?q=%22PT+Anugerah+Digital+Indonesia%22&tbm=nws&gl=id&hl=id"
+    categories: []

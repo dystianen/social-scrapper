@@ -1,0 +1,72 @@
+# config/settings.yml
+
+general:
+  project_name: "social-scraper"
+  log_level: "INFO"
+  data_dir: "./data"
+  output_dir: "./data/output"
+  cache_dir: "./data/cache"
+  cookies_dir: "./data/cookies"
+
+browser:
+  headless: false # true = tanpa UI, false = kelihatan browser-nya
+  max_instances: 3 # Maksimal browser bersamaan
+  default_timeout: 30000 # 30 detik
+  viewport:
+    width: 1366
+    height: 768
+
+rate_limit:
+  default_max_requests: 30
+  default_per_seconds: 60
+
+# Akun per platform (untuk yang butuh login)
+accounts:
+  instagram:
+    - username: "itfrontend.solusiku"
+      password: "Enyus1234"
+      email: "itfrontend.solusiku@gmail.com"
+
+    - username: "akun2_kamu"
+      password: "password2"
+  facebook:
+    - username: "akun_fb_kamu"
+      password: "password_fb"
+
+gmail:
+  email: "itfrontend.solusiku@gmail.com"
+  app_password: "Enyus1234"
+
+# Proxy (opsional tapi sangat disarankan untuk production)
+proxy:
+  enabled: false
+  pool:
+    - server: "http://proxy1:8080"
+      username: ""
+      password: ""
+    - server: "http://proxy2:8080"
+      username: ""
+      password: ""
+
+# Batas per platform — JANGAN serakah
+limits:
+  instagram:
+    max_posts_per_session: 20
+    max_comments_per_post: 50
+    session_cooldown_minutes: 30
+    max_sessions_per_day: 5
+  twitter:
+    max_profiles_per_session: 30
+    max_tweets_per_profile: 100
+    session_cooldown_minutes: 15
+  facebook:
+    max_pages_per_session: 15
+    session_cooldown_minutes: 45
+  news:
+    max_articles_per_run: 2
+    request_delay_seconds: 2
+
+storage:
+  type: "sqlite" # sqlite / json / csv
+  db_path: "./data/cache/scraper.db"
+  export_format: "json" # json / csv
