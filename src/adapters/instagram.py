@@ -647,13 +647,64 @@ class InstagramAdapter(BaseAdapter):
         # ── Ambil info post ──
         post_info = await page.evaluate("""
             () => {
-                // 1. Get Username first
+                // 1. Parse meta description for high-fidelity fallback info
+                let metaUsername = '';
+                let metaLikes = 0;
+                let metaCommentsCount = 0;
+                let metaDateStr = '';
+                let metaCaption = '';
+                
+                try {
+                    const meta = document.querySelector('meta[property="og:description"]') || document.querySelector('meta[name="description"]');
+                    if (meta) {
+                        const content = meta.getAttribute('content') || '';
+                        
+                        // Parse likes (support English and Indonesian formats)
+                        const likesMatch = content.match(/([\\d,.]+)\\s*(likes|suka)/i);
+                        if (likesMatch) {
+                            metaLikes = parseInt(likesMatch[1].replace(/[,.]/g, ''), 10) || 0;
+                        }
+                        
+                        // Parse comments count (support English and Indonesian formats)
+                        const commentsMatch = content.match(/([\\d,.]+)\\s*(comments|komentar)/i);
+                        if (commentsMatch) {
+                            metaCommentsCount = parseInt(commentsMatch[1].replace(/[,.]/g, ''), 10) || 0;
+                        }
+                        
+                        // Parse username and date
+                        const userDateMatch = content.match(/-\\s*([a-zA-Z0-9._]+)\\s+(?:on|pada)\\s+([^:]+):/i);
+                        if (userDateMatch) {
+                            metaUsername = userDateMatch[1].trim();
+                            metaDateStr = userDateMatch[2].trim();
+                        } else {
+                            const simpleMatch = content.match(/^([a-zA-Z0-9._]+)\\s+(?:on|pada)\\s+([^:]+):/i);
+                            if (simpleMatch) {
+                                metaUsername = simpleMatch[1].trim();
+                                metaDateStr = simpleMatch[2].trim();
+                            }
+                        }
+                        
+                        // Clean caption: extract only actual post text inside quotes
+                        const quoteMatch = content.match(/:\\s*"(.*)"\\s*$/s) || content.match(/:\\s*“(.*)”\\s*$/s);
+                        if (quoteMatch) {
+                            metaCaption = quoteMatch[1];
+                        } else {
+                            const colonIndex = content.indexOf(':');
+                            if (colonIndex !== -1 && colonIndex < 150) {
+                                metaCaption = content.substring(colonIndex + 1).replace(/^[\\s"“]+|[\\s"”]+$/g, '').trim();
+                            } else {
+                                metaCaption = content;
+                            }
+                        }
+                    }
+                } catch (e) {}
+
+                // 2. Get Username from UI
                 const headerLink = document.querySelector('header a[href^="/"], [role="link"] a[href^="/"]');
                 const usernameEl = headerLink ? headerLink.querySelector('span') : null;
                 let username = usernameEl ? usernameEl.textContent.trim() : '';
                 
                 if (!username) {
-                    // Fallback username
                     const h1s = document.querySelectorAll('h1');
                     for (const h1 of h1s) {
                         const text = h1.textContent.trim();
@@ -663,43 +714,45 @@ class InstagramAdapter(BaseAdapter):
                         }
                     }
                 }
+                
+                if (!username) {
+                    username = metaUsername;
+                }
 
-                // 2. Get Caption / Description
-                let caption = '';
-                try {
-                    // Cari semua time tags
-                    const timeTags = document.querySelectorAll('time');
-                    for (const timeEl of timeTags) {
-                        const aLink = timeEl.closest('a');
-                        // Caption time tag biasanya tidak memiliki parent a link, atau link ke post itu sendiri
-                        if (!aLink || (aLink.getAttribute('href') && !aLink.getAttribute('href').includes('/c/'))) {
-                            let container = timeEl.parentElement;
-                            for (let depth = 0; depth < 8; depth++) {
-                                if (!container) break;
-                                
-                                if (username && container.textContent.includes(username)) {
-                                    const spans = container.querySelectorAll('span');
-                                    for (const span of spans) {
-                                        // Jangan ambil span yang ada time atau username didalamnya
-                                        if (span.querySelector('time') || span.querySelector('span._ap3a')) continue;
-                                        
-                                        const text = span.textContent.trim();
-                                        if (text && text !== username && !text.startsWith('•') && text !== 'Verified') {
-                                            if (text.length > caption.length) {
-                                                caption = text;
+                // 3. Get Caption — prefer meta description (preserves newlines & formatting)
+                //    Fall back to UI extraction only when meta is absent
+                let caption = metaCaption;
+
+                if (!caption) {
+                    try {
+                        const timeTags = document.querySelectorAll('time');
+                        for (const timeEl of timeTags) {
+                            const aLink = timeEl.closest('a');
+                            if (!aLink || (aLink.getAttribute('href') && !aLink.getAttribute('href').includes('/c/'))) {
+                                let container = timeEl.parentElement;
+                                for (let depth = 0; depth < 8; depth++) {
+                                    if (!container) break;
+                                    if (username && container.textContent.includes(username)) {
+                                        const spans = container.querySelectorAll('span');
+                                        for (const span of spans) {
+                                            if (span.querySelector('time') || span.querySelector('span._ap3a')) continue;
+                                            const text = span.textContent.trim();
+                                            if (text && text !== username && !text.startsWith('•') && text !== 'Verified') {
+                                                if (text.length > caption.length) {
+                                                    caption = text;
+                                                }
                                             }
                                         }
                                     }
+                                    if (caption) break;
+                                    container = container.parentElement;
                                 }
-                                if (caption) break;
-                                container = container.parentElement;
                             }
+                            if (caption) break;
                         }
-                        if (caption) break;
-                    }
-                } catch(e) {}
+                    } catch(e) {}
+                }
 
-                // Fallback 1: Cari span dir="auto" yang panjang di dalam article
                 if (!caption) {
                     try {
                         const article = document.querySelector('article');
@@ -717,30 +770,41 @@ class InstagramAdapter(BaseAdapter):
                     } catch(e) {}
                 }
 
-                // Fallback 2: Meta description
-                if (!caption) {
-                    try {
-                        const meta = document.querySelector('meta[property="og:description"]') || document.querySelector('meta[name="description"]');
-                        if (meta) {
-                            const content = meta.getAttribute('content') || '';
-                            const match = content.match(/:\\s*"(.*)"/);
-                            if (match) {
-                                caption = match[1];
-                            } else {
-                                caption = content;
-                            }
+
+                // 4. Get Likes from UI
+                let likes = 0;
+                try {
+                    const likesElements = document.querySelectorAll('a[href*="/liked_by/"], button');
+                    for (const el of likesElements) {
+                        const text = el.textContent.trim();
+                        const m = text.match(/([\\d,.]+)\\s*(likes|suka)/i);
+                        if (m) {
+                            likes = parseInt(m[1].replace(/[,.]/g, ''), 10) || 0;
+                            break;
                         }
-                    } catch(e) {}
+                    }
+                } catch (e) {}
+                
+                if (likes === 0) {
+                    likes = metaLikes;
                 }
 
-                // 3. Get Timestamp
+                // 5. Get Comments Count
+                let commentsCount = metaCommentsCount;
+
+                // 6. Get Timestamp
                 const timeEl = document.querySelector('time');
-                const timestamp = timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '';
+                let timestamp = timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '';
+                if (!timestamp && metaDateStr) {
+                    timestamp = metaDateStr;
+                }
 
                 return {
                     username: username,
                     caption: caption,
                     timestamp: timestamp,
+                    likes: likes,
+                    comments_count: commentsCount,
                     url: window.location.href,
                 };
             }
@@ -969,7 +1033,8 @@ class InstagramAdapter(BaseAdapter):
             "username": post_info.get("username", ""),
             "caption": post_info.get("caption", ""),
             "timestamp": post_info.get("timestamp", ""),
-            "comments_count": len(unique_comments),
+            "likes": post_info.get("likes", 0),
+            "comments_count": post_info.get("comments_count") or len(unique_comments),
             "comments": unique_comments[:max_comments],
         }
 
@@ -1099,15 +1164,15 @@ class InstagramAdapter(BaseAdapter):
             await page.goto(task.url, wait_until="domcontentloaded")
             await self.human.human_delay(2, 4)
 
-            info = await page.evaluate("""
+            info = await page.evaluate(r"""
                 () => {
                     const meta = document.querySelector('meta[property="og:description"]');
                     const content = meta ? meta.content : '';
-                    const f = content.match(/([\d,.]+[KMkm]?)\\s*Followers/i);
-                    const g = content.match(/([\d,.]+[KMkm]?)\\s*Following/i);
-                    const p = content.match(/([\d,.]+[KMkm]?)\\s*Posts/i);
+                    const f = content.match(/([\d,.]+[KMkm]?)\s*Followers/i);
+                    const g = content.match(/([\d,.]+[KMkm]?)\s*Following/i);
+                    const p = content.match(/([\d,.]+[KMkm]?)\s*Posts/i);
                     return {
-                        username: window.location.pathname.replace(/\\//g, ''),
+                        username: window.location.pathname.replace(/\//g, ''),
                         posts_count: p ? p[1] : 'N/A',
                         followers: f ? f[1] : 'N/A',
                         following: g ? g[1] : 'N/A',
