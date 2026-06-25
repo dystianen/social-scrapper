@@ -56,14 +56,14 @@ class InstagramAdapter(BaseAdapter):
                 pass
 
             # Tunggu form login
-            await page.wait_for_selector('input[name="username"]', timeout=15000)
+            await page.wait_for_selector('input[name="email"]', timeout=15000)
 
             # Ketik username
-            await self.human.type_text(page, 'input[name="username"]', username)
+            await self.human.type_text(page, 'input[name="email"]', email)
             await self.human.human_delay(0.5, 1.0)
 
             # Ketik password
-            await self.human.type_text(page, 'input[name="password"]', password)
+            await self.human.type_text(page, 'input[name="pass"]', password)
             await self.human.human_delay(0.5, 1.5)
 
             # Klik login
