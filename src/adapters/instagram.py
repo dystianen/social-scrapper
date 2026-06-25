@@ -1124,7 +1124,8 @@ class InstagramAdapter(BaseAdapter):
     # ─────────────────────────────────────────────
     def _get_account(self) -> Optional[dict]:
         accounts = self.config.get("accounts", {}).get("instagram", [])
-        return random.choice(accounts) if accounts else None
+        valid_accounts = [acc for acc in accounts if acc.get("username") and "kamu" not in acc.get("username") and "akun" not in acc.get("username")]
+        return random.choice(valid_accounts) if valid_accounts else (accounts[0] if accounts else None)
 
     async def _get_or_create_page(self, account: Optional[dict]) -> tuple[Page, bool]:
         """Dapatkan page aktif (reused) atau buat session baru."""
