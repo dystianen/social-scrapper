@@ -18,10 +18,14 @@ console = Console()
 class InstagramAdapter(BaseAdapter):
     platform_name = "instagram"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.active_page = None
+
     # ─────────────────────────────────────────────
     # LOGIN + OTP
     # ─────────────────────────────────────────────
-    async def login(self, username: str, password: str, email: str = "") -> bool:
+    async def login(self, username: str, password: str, email: str = "", close_session: bool = True) -> bool:
         """
         Login ke Instagram.
         Kalau diminta OTP, otomatis ambil dari Gmail.
@@ -39,9 +43,56 @@ class InstagramAdapter(BaseAdapter):
         else:
             console.print("[yellow]⚠ Gmail tidak dikonfigurasi, OTP harus dimasukkan manual[/yellow]")
 
-        page = await self.browser.create_session()
+        # ── Cek apakah ada cookies aktif di cache ──
+        cookies_file = f"instagram_{username}.json"
+        cookies_path = self.browser.cookies_dir / cookies_file
+        
+        # Load cookies jika file cookie ada
+        page = await self.browser.create_session(
+            cookies_file=cookies_file if cookies_path.exists() else None
+        )
 
         try:
+            # ── Cek apakah session login dari cookies masih aktif ──
+            if cookies_path.exists():
+                console.print("  [dim]Memeriksa apakah session login dari cookies masih aktif...[/dim]")
+                await page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+                await self.human.human_delay(2, 4)
+                
+                # Cek elemen navigasi/beranda yang hanya muncul jika sudah login
+                is_logged_in = False
+                check_selectors = [
+                    '[aria-label="Beranda"]',
+                    'svg[aria-label="Beranda"]',
+                    '[aria-label="Home"]',
+                    'svg[aria-label="Home"]',
+                    '[aria-label="Search"]',
+                    '[role="navigation"]',
+                    'a[href="/"]',
+                ]
+                
+                for sel in check_selectors:
+                    try:
+                        if await page.locator(sel).first.is_visible(timeout=1500):
+                            is_logged_in = True
+                            break
+                    except Exception:
+                        pass
+                
+                if is_logged_in:
+                    console.print(f"[bold green]✓ Session login masih aktif (cookies valid): {username}[/bold green]")
+                    # Tutup popups/dialogs yang mengganggu
+                    await self._dismiss_dialogs(page)
+                    
+                    if not close_session:
+                        self.active_page = page
+                    else:
+                        await self.browser.close_session(page, save_cookies_as=cookies_file)
+                    return True
+                else:
+                    console.print("  [yellow]⚠ Session cookies kedaluwarsa atau tidak valid, melakukan login murni...[/yellow]")
+
+            # ── Proses Login Murni ──
             # Buka halaman login
             await page.goto("https://www.instagram.com/accounts/login/", wait_until="domcontentloaded")
             await self.human.human_delay(2, 4)
@@ -55,25 +106,137 @@ class InstagramAdapter(BaseAdapter):
             except Exception:
                 pass
 
-            # Tunggu form login
-            await page.wait_for_selector('input[name="email"]', timeout=15000)
+            # Tunggu form login (mendukung input username/email Instagram atau Facebook)
+            login_input_selector = 'input[name="username"], input[name="email"]'
+            await page.wait_for_selector(login_input_selector, timeout=15000)
 
-            # Ketik username
-            await self.human.type_text(page, 'input[name="email"]', email)
+            # Ketik username/email
+            username_to_type = username if username else email
+            await self.human.type_text(page, login_input_selector, username_to_type)
             await self.human.human_delay(0.5, 1.0)
 
-            # Ketik password
-            await self.human.type_text(page, 'input[name="pass"]', password)
+            # Ketik password (mendukung input password Instagram atau Facebook)
+            password_selector = 'input[name="password"], input[name="pass"]'
+            await self.human.type_text(page, password_selector, password)
             await self.human.human_delay(0.5, 1.5)
 
             # Klik login
-            await self.human.click_element(page, 'button[type="submit"]')
-            await self.human.human_delay(4, 7)
+            login_selectors = [
+                '[role="button"][aria-label="Log In"]',
+                '[role="button"]:has-text("Log in")',
+                '[role="button"]:has-text("Login")',
+                'button[type="submit"]',
+            ]
 
-            # ── CEK: Apakah perlu OTP? ──
-            otp_needed = await self._check_if_otp_needed(page)
+            for sel in login_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2000):
+                        await el.click()
+                        break
+                except Exception:
+                    continue
+                
+            # ── Tunggu transisi setelah login (max 30 detik) ──
+            console.print("  [dim]Menunggu transisi setelah login...[/dim]")
+            
+            success_selectors = [
+                'button:has-text("Save Info")',
+                'button:has-text("Save Your Login Info")',
+                'button:has-text("Not Now")',
+                'button:has-text("Not now")',
+                '[aria-label="Home"]',
+                'svg[aria-label="Home"]',
+                '[aria-label="Beranda"]',
+                'svg[aria-label="Beranda"]',
+                '[aria-label="Search"]',
+            ]
+            
+            failure_selectors = [
+                '#slfErrorAlert',
+                '[data-testid="login-error-message"]',
+            ]
+            
+            otp_selectors = [
+                'input[name="security_code"]',
+                'input[name="approvals_code"]',
+                'input[aria-label*="Security code"]',
+                'input[aria-label*="confirmation code"]',
+                'input[aria-label*="Kode"]',
+                'input[placeholder*="Kode"]',
+                'input[placeholder*="code"]',
+                'input[placeholder*="Code"]',
+                'h2:has-text("Check your email")',
+                'span:has-text("Enter the code")',
+                'label:has-text("Code")',
+                'label:has-text("Kode")',
+                '*:has-text("Check your email")',
+                '*:has-text("Periksa email Anda")',
+                '*:has-text("Masukkan kode")',
+            ]
 
-            if otp_needed:
+            login_state = None  # "success", "otp", "failed", or "timeout"
+            for _ in range(30):
+                # 1. Cek OTP
+                otp_needed = False
+                if "auth_platform" in page.url or "codeentry" in page.url:
+                    otp_needed = True
+                else:
+                    for sel in otp_selectors:
+                        try:
+                            if await page.locator(sel).first.is_visible(timeout=0):
+                                otp_needed = True
+                                break
+                        except Exception:
+                            pass
+                
+                if otp_needed:
+                    login_state = "otp"
+                    break
+                
+                # 2. Cek Failure
+                failed = False
+                for sel in failure_selectors:
+                    try:
+                        if await page.locator(sel).first.is_visible(timeout=0):
+                            failed = True
+                            break
+                    except Exception:
+                        pass
+                
+                if failed:
+                    login_state = "failed"
+                    break
+                
+                # 3. Cek Success
+                success = False
+                if "/accounts/login" not in page.url:
+                    for sel in success_selectors:
+                        try:
+                            if await page.locator(sel).first.is_visible(timeout=0):
+                                success = True
+                                break
+                        except Exception:
+                            pass
+                
+                if success:
+                    login_state = "success"
+                    break
+                
+                # 4. Cek if URL changed to homepage or other page (fallback)
+                current_url = page.url
+                if "/accounts/login" not in current_url and "instagram.com" in current_url:
+                    if "challenge" not in current_url and "two_factor" not in current_url:
+                        await asyncio.sleep(2)
+                        login_state = "success"
+                        break
+
+                await asyncio.sleep(1)
+
+            if not login_state:
+                login_state = "success" if "/accounts/login" not in page.url else "timeout"
+
+            if login_state == "otp":
                 console.print("[yellow]⚠ Instagram minta verifikasi OTP[/yellow]")
 
                 otp_code = None
@@ -92,14 +255,52 @@ class InstagramAdapter(BaseAdapter):
 
                 if otp_code:
                     await self._enter_otp(page, otp_code)
+                    
+                    # Tunggu transisi setelah OTP
+                    console.print("  [dim]Menunggu transisi setelah OTP...[/dim]")
+                    login_state = None
+                    for _ in range(30):
+                        failed = False
+                        for sel in failure_selectors:
+                            try:
+                                if await page.locator(sel).first.is_visible(timeout=0):
+                                    failed = True
+                                    break
+                            except Exception:
+                                pass
+                        if failed:
+                            login_state = "failed"
+                            break
+                        
+                        success = False
+                        if "/accounts/login" not in page.url:
+                            for sel in success_selectors:
+                                try:
+                                    if await page.locator(sel).first.is_visible(timeout=0):
+                                        success = True
+                                        break
+                                except Exception:
+                                    pass
+                        if success:
+                            login_state = "success"
+                            break
+                            
+                        current_url = page.url
+                        if "/accounts/login" not in current_url and "challenge" not in current_url and "two_factor" not in current_url:
+                            await asyncio.sleep(2)
+                            login_state = "success"
+                            break
+                            
+                        await asyncio.sleep(1)
+                    
+                    if not login_state:
+                        login_state = "success" if "/accounts/login" not in page.url else "timeout"
                 else:
                     console.print("[red]✗ Tidak ada OTP, login gagal[/red]")
                     return False
 
             # ── CEK: Login berhasil? ──
-            current_url = page.url
-            if "/accounts/login" in current_url:
-                # Mungkin ada error message
+            if login_state == "failed":
                 try:
                     error_el = page.locator('#slfErrorAlert, [data-testid="login-error-message"]').first
                     if await error_el.is_visible(timeout=2000):
@@ -110,12 +311,31 @@ class InstagramAdapter(BaseAdapter):
                 except Exception:
                     console.print("[red]✗ Login gagal[/red]")
                 return False
+            elif login_state == "timeout":
+                console.print("[red]✗ Login gagal — timeout menunggu transisi halaman[/red]")
+                return False
 
             # ── Handle dialog popups ──
             await self._dismiss_dialogs(page)
 
             # ── Simpan cookies ──
-            await self.browser.close_session(page, save_cookies_as=f"instagram_{username}.json")
+            if close_session:
+                await self.browser.close_session(page, save_cookies_as=f"instagram_{username}.json")
+            else:
+                # Simpan cookies ke file tanpa menutup session
+                context = page.context
+                try:
+                    cookies = await context.cookies()
+                    if cookies:
+                        import json
+                        path = self.browser.cookies_dir / f"instagram_{username}.json"
+                        path.write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+                        console.print(f"  [dim]Cookies saved to instagram_{username}.json[/dim]")
+                except Exception as e:
+                    console.print(f"  [yellow]Warning: gagal save cookies: {e}[/yellow]")
+                
+                self.active_page = page
+            
             console.print(f"[bold green]✓ Login berhasil: {username}[/bold green]")
             return True
 
@@ -132,10 +352,17 @@ class InstagramAdapter(BaseAdapter):
             'input[aria-label*="Security code"]',
             'input[aria-label*="confirmation code"]',
             'input[aria-label*="Kode"]',
-            'text="Enter the code"',
-            'text="Enter Security Code"',
-            'text="Masukkan kode"',
-            'text="Confirm"',
+            'input[placeholder*="Kode"]',
+            'input[placeholder*="code"]',
+            'input[placeholder*="Code"]',
+            'h2:has-text("Check your email")',
+            'span:has-text("Enter the code")',
+            'label:has-text("Code")',
+            'label:has-text("Kode")',
+            '*:has-text("Check your email")',
+            '*:has-text("Periksa email Anda")',
+            '*:has-text("Masukkan kode")',
+            '*:has-text("Confirm")',
         ]
 
         for selector in indicators:
@@ -163,6 +390,10 @@ class InstagramAdapter(BaseAdapter):
             'input[aria-label*="Security code"]',
             'input[aria-label*="confirmation code"]',
             'input[aria-label*="Kode"]',
+            'input[placeholder*="Kode"]',
+            'input[placeholder*="code"]',
+            'input[placeholder*="Code"]',
+            'input[name="email"]',                # Seringkali input name="email" di halaman verifikasi email
             'input[type="tel"]',                  # Kadang OTP pakai type tel
             'input[type="number"]',
             'input[maxlength="6"]',
@@ -178,16 +409,38 @@ class InstagramAdapter(BaseAdapter):
             except Exception:
                 continue
 
+        # Fallback pencarian dengan label Code/Kode
+        if not otp_input:
+            for label_text in ["Code", "Kode"]:
+                try:
+                    el = page.get_by_label(label_text, exact=False)
+                    if await el.is_visible(timeout=2000):
+                        otp_input = el
+                        break
+                except Exception:
+                    pass
+
         if otp_input:
-            await self.human.type_text(page, otp_input, otp_code)
+            if isinstance(otp_input, str):
+                await self.human.type_text(page, otp_input, otp_code)
+            else:
+                await otp_input.fill(otp_code)
             await self.human.human_delay(0.5, 1.0)
 
-            # Klik tombol confirm/submit
+            # Klik tombol confirm/submit (bisa button, div role="button", dsb)
             confirm_selectors = [
                 'button:has-text("Confirm")',
                 'button:has-text("Submit")',
                 'button:has-text("Verify")',
                 'button:has-text("Konfirmasi")',
+                'button:has-text("Lanjutkan")',
+                'button:has-text("Continue")',
+                'button:has-text("Next")',
+                '[role="button"]:has-text("Confirm")',
+                '[role="button"]:has-text("Submit")',
+                '[role="button"]:has-text("Verify")',
+                '[role="button"]:has-text("Continue")',
+                '[role="button"]:has-text("Lanjutkan")',
                 'button[type="submit"]',
             ]
 
@@ -195,7 +448,7 @@ class InstagramAdapter(BaseAdapter):
                 try:
                     btn = page.locator(sel).first
                     if await btn.is_visible(timeout=2000):
-                        await self.human.click_element(page, sel)
+                        await btn.click()
                         break
                 except Exception:
                     continue
@@ -208,7 +461,7 @@ class InstagramAdapter(BaseAdapter):
             await self.human.human_delay(5, 8)
 
     async def _dismiss_dialogs(self, page: Page):
-        """Tutup semua dialog popup setelah login."""
+        """Tutup semua dialog popup setelah login secara berurutan."""
         dialogs = [
             'button:has-text("Not Now")',
             'button:has-text("Save Info")',
@@ -216,17 +469,39 @@ class InstagramAdapter(BaseAdapter):
             'button:has-text("Not now")',
             'button:has-text("Turn on Notifications")',
             'button:has-text("Cancel")',
+            'svg[aria-label="Close"]',
+            'svg[aria-label="Tutup"]',
+            '[aria-label="Close"]',
+            '[aria-label="Tutup"]',
         ]
 
-        for selector in dialogs:
-            try:
-                btn = page.locator(selector).first
-                if await btn.is_visible(timeout=3000):
-                    await btn.click()
-                    console.print(f"  [dim]Dialog dismissed: {selector}[/dim]")
-                    await self.human.human_delay(1, 2)
-            except Exception:
-                continue
+        # Coba klik dialog yang muncul secara dinamis sampai tidak ada lagi yang muncul
+        for attempt in range(5):
+            clicked = False
+            for selector in dialogs:
+                try:
+                    btn = page.locator(selector).first
+                    if await btn.is_visible(timeout=1000):
+                        await btn.click()
+                        console.print(f"  [dim]Dialog dismissed (Attempt {attempt+1}): {selector}[/dim]")
+                        await self.human.human_delay(1.5, 3.0)
+                        clicked = True
+                        break  # Mulai lagi dari awal karena DOM mungkin berubah setelah click
+                except Exception:
+                    continue
+            if not clicked:
+                # Jika tidak ada yang di-click, tunggu sebentar lalu coba check sekali lagi
+                await asyncio.sleep(1)
+                still_visible = False
+                for selector in dialogs:
+                    try:
+                        if await page.locator(selector).first.is_visible(timeout=0):
+                            still_visible = True
+                            break
+                    except Exception:
+                        pass
+                if not still_visible:
+                    break
 
     # ─────────────────────────────────────────────
     # SCRAPE ROUTER
@@ -246,6 +521,7 @@ class InstagramAdapter(BaseAdapter):
     # ─────────────────────────────────────────────
     # HASHTAG SCRAPING: #solusiku
     # ─────────────────────────────────────────────
+    
     async def _scrape_hashtag(self, task: ScrapingTask) -> ScrapingResult:
         """
         Scrape post dari halaman hashtag Instagram.
@@ -259,9 +535,7 @@ class InstagramAdapter(BaseAdapter):
 
         console.print(f"  [cyan]🔍 Membuka #{hashtag}: {hashtag_url}[/cyan]")
 
-        page = await self.browser.create_session(
-            cookies_file=f"instagram_{account['username']}.json" if account else None
-        )
+        page, reuse_session = await self._get_or_create_page(account)
 
         try:
             # Buka halaman hashtag
@@ -364,33 +638,109 @@ class InstagramAdapter(BaseAdapter):
         await page.goto(post_url, wait_until="domcontentloaded")
         await self.human.human_delay(2, 4)
 
+        # Tutup popups/dialogs
+        await self._dismiss_dialogs(page)
+
         # Baca post dulu (manusia baca dulu sebelum scroll ke komentar)
         await self.human.simulate_idle_activity(page)
 
         # ── Ambil info post ──
         post_info = await page.evaluate("""
             () => {
-                // Caption / text post
-                const captionEl = document.querySelector('h1, div[class*="_a9zs"] span, div[data-testid="post-comment-root"]');
-                const caption = captionEl ? captionEl.textContent.trim() : '';
+                // 1. Get Username first
+                const headerLink = document.querySelector('header a[href^="/"], [role="link"] a[href^="/"]');
+                const usernameEl = headerLink ? headerLink.querySelector('span') : null;
+                let username = usernameEl ? usernameEl.textContent.trim() : '';
+                
+                if (!username) {
+                    // Fallback username
+                    const h1s = document.querySelectorAll('h1');
+                    for (const h1 of h1s) {
+                        const text = h1.textContent.trim();
+                        if (text && !text.includes(' ') && text.length > 2) {
+                            username = text;
+                            break;
+                        }
+                    }
+                }
 
-                // Username
-                const userEl = document.querySelector('header a span, a[role="link"] span');
-                const username = userEl ? userEl.textContent.trim() : '';
+                // 2. Get Caption / Description
+                let caption = '';
+                try {
+                    // Cari semua time tags
+                    const timeTags = document.querySelectorAll('time');
+                    for (const timeEl of timeTags) {
+                        const aLink = timeEl.closest('a');
+                        // Caption time tag biasanya tidak memiliki parent a link, atau link ke post itu sendiri
+                        if (!aLink || (aLink.getAttribute('href') && !aLink.getAttribute('href').includes('/c/'))) {
+                            let container = timeEl.parentElement;
+                            for (let depth = 0; depth < 8; depth++) {
+                                if (!container) break;
+                                
+                                if (username && container.textContent.includes(username)) {
+                                    const spans = container.querySelectorAll('span');
+                                    for (const span of spans) {
+                                        // Jangan ambil span yang ada time atau username didalamnya
+                                        if (span.querySelector('time') || span.querySelector('span._ap3a')) continue;
+                                        
+                                        const text = span.textContent.trim();
+                                        if (text && text !== username && !text.startsWith('•') && text !== 'Verified') {
+                                            if (text.length > caption.length) {
+                                                caption = text;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (caption) break;
+                                container = container.parentElement;
+                            }
+                        }
+                        if (caption) break;
+                    }
+                } catch(e) {}
 
-                // Timestamp
+                // Fallback 1: Cari span dir="auto" yang panjang di dalam article
+                if (!caption) {
+                    try {
+                        const article = document.querySelector('article');
+                        if (article) {
+                            const spans = article.querySelectorAll('span[dir="auto"]');
+                            for (const span of spans) {
+                                const text = span.textContent.trim();
+                                if (text.length > 20 && text !== username && !span.querySelector('a[href*="/p/"]')) {
+                                    if (text.length > caption.length) {
+                                        caption = text;
+                                    }
+                                }
+                            }
+                        }
+                    } catch(e) {}
+                }
+
+                // Fallback 2: Meta description
+                if (!caption) {
+                    try {
+                        const meta = document.querySelector('meta[property="og:description"]') || document.querySelector('meta[name="description"]');
+                        if (meta) {
+                            const content = meta.getAttribute('content') || '';
+                            const match = content.match(/:\\s*"(.*)"/);
+                            if (match) {
+                                caption = match[1];
+                            } else {
+                                caption = content;
+                            }
+                        }
+                    } catch(e) {}
+                }
+
+                // 3. Get Timestamp
                 const timeEl = document.querySelector('time');
-                const timestamp = timeEl ? timeEl.getAttribute('datetime') || timeEl.textContent.trim() : '';
-
-                // Likes
-                const likeSection = document.querySelector('section span[class*="html-span"]');
-                const likes = likeSection ? likeSection.textContent.trim() : '';
+                const timestamp = timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '';
 
                 return {
                     username: username,
                     caption: caption,
                     timestamp: timestamp,
-                    likes: likes,
                     url: window.location.href,
                 };
             }
@@ -401,72 +751,200 @@ class InstagramAdapter(BaseAdapter):
 
         # ── Scroll untuk load komentar ──
         scroll_times = max(3, max_comments // 8)
-        await self.human.scroll_page(page, times=scroll_times)
+        last_comment_count = 0
+        no_change_attempts = 0
+
+        for _ in range(scroll_times):
+            # Coba scroll di dalam scrollable container (dialog atau article pane)
+            scrolled = await page.evaluate("""
+                () => {
+                    const roots = [
+                        document.querySelector('div[role="dialog"]'),
+                        document.querySelector('article'),
+                        document.body
+                    ];
+                    for (const root of roots) {
+                        if (!root) continue;
+                        const elements = root.querySelectorAll('ul, div');
+                        for (const el of elements) {
+                            const style = window.getComputedStyle(el);
+                            const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll' || el.scrollHeight > el.clientHeight + 50;
+                            if (isScrollable && el.clientHeight > 200 && el.clientHeight < window.innerHeight - 50) {
+                                el.scrollTop = el.scrollHeight;
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+            """)
+
+            if not scrolled:
+                # Kalau tidak menemukan scrollable pane, scroll halaman utama
+                await self.human.scroll_page(page, times=1)
+
+            # Delay dipercepat (dari 1.5-3.0 ke 1.0-2.0)
+            await self.human.human_delay(1.0, 2.0)
+
+            # Coba expand lagi setelah scroll
+            await self._expand_comments(page)
+            
+            # Hitung jumlah komentar saat ini
+            current_comment_count = await page.evaluate("""
+                () => document.querySelectorAll('a[href*="/c/"]').length
+            """)
+            
+            # Jika sudah mencapai max_comments, stop
+            if current_comment_count >= max_comments:
+                break
+                
+            # Jika tidak ada penambahan komentar baru, stop setelah 2x coba
+            if current_comment_count == last_comment_count:
+                no_change_attempts += 1
+                if no_change_attempts >= 2:
+                    break
+            else:
+                no_change_attempts = 0
+                
+            last_comment_count = current_comment_count
 
         # ── Extract komentar ──
         comments = await page.evaluate("""
             () => {
                 const results = [];
+                const seen = new Set();
 
-                // Cari elemen komentar
-                const commentItems = document.querySelectorAll('ul ul li, div[role="button"] + div[role="button"]');
+                // ===== STRATEGI UTAMA =====
+                // Cari semua link timestamp komentar (mengandung '/c/')
+                const commentLinks = document.querySelectorAll('a[href*="/c/"]');
 
-                // Strategy 1: ul > ul > li
-                const listItems = document.querySelectorAll('ul ul li');
-                for (const li of listItems) {
+                for (const aLink of commentLinks) {
                     try {
-                        const userLink = li.querySelector('a[href*="/"] span');
-                        const allSpans = li.querySelectorAll('span');
-                        const timeEl = li.querySelector('time');
+                        const href = aLink.getAttribute('href') || '';
+                        
+                        // Get timestamp
+                        const timeEl = aLink.querySelector('time');
+                        const timestamp = timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '';
 
-                        if (userLink) {
-                            const username = userLink.textContent.trim();
+                        // Naik ke parent container untuk mencari username dan text komentar
+                        let container = aLink.parentElement;
+                        let username = '';
+                        let commentText = '';
 
-                            // Ambil text komentar (span terpanjang yang bukan username)
-                            let commentText = '';
-                            for (const span of allSpans) {
-                                const text = span.textContent.trim();
-                                if (text.length > commentText.length &&
-                                    text !== username &&
-                                    !text.match(/^\d+[hdwm]$/)) {
-                                    commentText = text;
+                        for (let depth = 0; depth < 10; depth++) {
+                            if (!container) break;
+
+                            // 1. Cari username (span._ap3a)
+                            const userSpan = container.querySelector('span._ap3a');
+                            if (userSpan) {
+                                username = userSpan.textContent.trim();
+                            } else {
+                                // Fallback: cari link profil user (starts with /, not containing p/reel/c/explore)
+                                const allLinks = container.querySelectorAll('a[href^="/"]');
+                                for (const a of allLinks) {
+                                    const linkHref = a.getAttribute('href') || '';
+                                    const cleanHref = linkHref.replace(/^\\/|\\/$/g, '');
+                                    if (cleanHref && !linkHref.includes('/p/') && !linkHref.includes('/reel/') && !linkHref.includes('/c/') && !linkHref.includes('/explore/')) {
+                                        username = cleanHref;
+                                        break;
+                                    }
                                 }
                             }
 
-                            if (commentText && commentText.length > 1) {
+                            // 2. Cari comment text
+                            if (username) {
+                                const spans = container.querySelectorAll('span');
+                                for (const span of spans) {
+                                    const text = span.textContent.trim();
+                                    if (!text || text === username) continue;
+                                    
+                                    // Skip buttons / metadata
+                                    if (['Reply', 'See translation', 'Delete', 'Report'].includes(text) || text.startsWith('View replies')) {
+                                        continue;
+                                    }
+
+                                    // Skip if span contains time or username elements
+                                    if (span.querySelector('time') || span.querySelector('span._ap3a')) continue;
+
+                                    if (!commentText || text.length > commentText.length) {
+                                        commentText = text;
+                                    }
+                                }
+                            }
+
+                            if (username && commentText) {
+                                break;
+                            }
+                            container = container.parentElement;
+                        }
+
+                        if (username && commentText) {
+                            const key = username + '::' + timestamp + '::' + commentText.substring(0, 50);
+                            if (!seen.has(key)) {
+                                seen.add(key);
                                 results.push({
                                     username: username,
                                     text: commentText,
-                                    timestamp: timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '',
+                                    timestamp: timestamp,
                                 });
                             }
                         }
                     } catch(e) {}
                 }
 
-                // Strategy 2: Kalau strategy 1 dapat sedikit
-                if (results.length < 2) {
-                    const allSpans = document.querySelectorAll('article span[dir="auto"]');
-                    // Group spans by parent
-                    for (const span of allSpans) {
-                        const text = span.textContent.trim();
-                        if (text.length > 3 && !text.match(/^\d+[hdwm]$/)) {
-                            const parent = span.closest('li, div[role="button"]');
-                            if (parent) {
-                                const userLink = parent.querySelector('a[href*="/"]');
-                                if (userLink) {
-                                    const username = userLink.textContent.trim();
-                                    const alreadyExists = results.some(r => r.text === text);
-                                    if (!alreadyExists && text !== username) {
-                                        results.push({
-                                            username: username,
-                                            text: text,
-                                            timestamp: '',
-                                        });
-                                    }
+                // ===== STRATEGI FALLBACK =====
+                // Jika tidak ada commentLinks (misal layout tanpa link /c/ atau login modal/guest view)
+                // Coba fallback dengan mencari avatar img + text
+                if (results.length === 0) {
+                    const avatarImgs = document.querySelectorAll('img[alt*="profile picture"]');
+
+                    for (const img of avatarImgs) {
+                        try {
+                            const altText = img.getAttribute('alt') || '';
+                            const username = altText.replace(/'s profile picture$/i, '').trim();
+                            if (!username) continue;
+
+                            let container = img;
+                            for (let i = 0; i < 12; i++) {
+                                container = container.parentElement;
+                                if (!container) break;
+                                if (container.querySelector('time')) {
+                                    break;
                                 }
                             }
-                        }
+
+                            if (!container) continue;
+
+                            const timeEl = container.querySelector('time');
+                            const timestamp = timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '';
+
+                            let commentText = '';
+                            const allSpans = container.querySelectorAll('span');
+                            for (const span of allSpans) {
+                                const text = span.textContent.trim();
+                                if (!text || text === username) continue;
+                                if (['Reply', 'See translation', 'Delete', 'Report'].includes(text) || text.startsWith('View replies')) {
+                                    continue;
+                                }
+                                if (span.querySelector('time') || span.querySelector('img') || span.querySelector('svg')) continue;
+
+                                if (!commentText || text.length > commentText.length) {
+                                    commentText = text;
+                                }
+                            }
+
+                            if (commentText) {
+                                const key = username + '::' + timestamp + '::' + commentText.substring(0, 50);
+                                if (!seen.has(key)) {
+                                    seen.add(key);
+                                    results.push({
+                                        username: username,
+                                        text: commentText,
+                                        timestamp: timestamp,
+                                    });
+                                }
+                            }
+                        } catch(e) {}
                     }
                 }
 
@@ -474,7 +952,7 @@ class InstagramAdapter(BaseAdapter):
             }
         """)
 
-        # Dedup komentar
+        # Dedup komentar (extra safety)
         seen = set()
         unique_comments = []
         for c in comments:
@@ -491,7 +969,6 @@ class InstagramAdapter(BaseAdapter):
             "username": post_info.get("username", ""),
             "caption": post_info.get("caption", ""),
             "timestamp": post_info.get("timestamp", ""),
-            "likes": post_info.get("likes", ""),
             "comments_count": len(unique_comments),
             "comments": unique_comments[:max_comments],
         }
@@ -501,30 +978,33 @@ class InstagramAdapter(BaseAdapter):
     async def _expand_comments(self, page: Page):
         """Klik semua tombol untuk expand komentar."""
         expand_selectors = [
+            # View all comments (paling penting)
+            'div[role="button"]:has-text("View all")',
+            'div[role="button"]:has-text("Lihat semua")',
+            'div[role="button"]:has-text("View all comments")',
+            'div[role="button"]:has-text("Lihat semua komentar")',
+            # Load more
+            'div[role="button"]:has-text("Load more")',
+            'div[role="button"]:has-text("Muat lebih")',
+            # Button fallback
             'button:has-text("View all")',
             'button:has-text("Load more")',
-            'button:has-text("View replies")',
-            'button:has-text("Lihat semua")',
-            'button:has-text("Lihat komentar")',
             'li button:has-text("more")',
-            'div[role="button"]:has-text("View all")',
-            'div[role="button"]:has-text("Load more")',
         ]
 
-        for _ in range(5):  # Maksimal 5 kali expand
+        for _ in range(3):  # Cukup 3x per panggilan karena dipanggil berulang kali di scroll loop
             expanded = False
             for selector in expand_selectors:
                 try:
                     btn = page.locator(selector).first
                     if await btn.is_visible(timeout=1500):
-                        await self.human.click_element(page, selector)
+                        await btn.click()
                         await self.human.human_delay(1, 3)
                         expanded = True
                 except Exception:
                     continue
             if not expanded:
                 break
-
     # ─────────────────────────────────────────────
     # PROFILE + COMMENTS (tetap ada untuk fleksibilitas)
     # ─────────────────────────────────────────────
@@ -534,9 +1014,7 @@ class InstagramAdapter(BaseAdapter):
         max_comments = task.params.get("max_comments", 50)
 
         account = self._get_account()
-        page = await self.browser.create_session(
-            cookies_file=f"instagram_{account['username']}.json" if account else None
-        )
+        page, reuse_session = await self._get_or_create_page(account)
 
         try:
             post_data = await self._open_post_and_scrape(page, post_url, max_comments)
@@ -563,9 +1041,7 @@ class InstagramAdapter(BaseAdapter):
         max_posts = task.params.get("max_posts", 20)
 
         account = self._get_account()
-        page = await self.browser.create_session(
-            cookies_file=f"instagram_{account['username']}.json" if account else None
-        )
+        page, reuse_session = await self._get_or_create_page(account)
 
         try:
             await page.goto(profile_url, wait_until="domcontentloaded")
@@ -618,7 +1094,7 @@ class InstagramAdapter(BaseAdapter):
 
     async def _scrape_profile_info(self, task: ScrapingTask) -> ScrapingResult:
         """Ambil info dasar profil."""
-        page = await self.browser.create_session()
+        page, reuse_session = await self._get_or_create_page(None)
         try:
             await page.goto(task.url, wait_until="domcontentloaded")
             await self.human.human_delay(2, 4)
@@ -649,3 +1125,24 @@ class InstagramAdapter(BaseAdapter):
     def _get_account(self) -> Optional[dict]:
         accounts = self.config.get("accounts", {}).get("instagram", [])
         return random.choice(accounts) if accounts else None
+
+    async def _get_or_create_page(self, account: Optional[dict]) -> tuple[Page, bool]:
+        """Dapatkan page aktif (reused) atau buat session baru."""
+        page = None
+        reuse = False
+        if hasattr(self, "active_page") and self.active_page:
+            try:
+                if not self.active_page.is_closed():
+                    page = self.active_page
+                    reuse = True
+                    console.print("  [dim]Reusing active logged-in browser session[/dim]")
+            except Exception:
+                pass
+            self.active_page = None # Reset agar tidak di-reuse berkali-kali secara salah
+
+        if not page:
+            page = await self.browser.create_session(
+                cookies_file=f"instagram_{account['username']}.json" if account else None
+            )
+            
+        return page, reuse

@@ -56,10 +56,9 @@ class ScrapingOrchestrator:
             db_path=config.get("general", {}).get("cache_dir", "./data/cache") + "/dedup_hashes.txt"
         )
 
-        self.storage = Storage({
-            "db_path": config.get("storage", {}).get("db_path", "./data/cache/scraper.db"),
-            "output_dir": config.get("general", {}).get("output_dir", "./data/output"),
-        })
+        storage_config = config.get("storage", {}).copy()
+        storage_config["output_dir"] = config.get("general", {}).get("output_dir", "./data/output")
+        self.storage = Storage(storage_config)
 
         # Inisialisasi adapters
         self.adapters = {}

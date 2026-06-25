@@ -27,3 +27,6 @@ python-dateutil==2.9.0.post0
 
 # Logging
 rich==13.9.4
+
+# PostgreSQL
+psycopg2-binary==2.9.12

@@ -35,7 +35,7 @@ accounts:
 
 gmail:
   email: "itfrontend.solusiku@gmail.com"
-  app_password: "Enyus1234"
+  app_password: "hkoyrcarrfchgolx"
 
 # Proxy (opsional tapi sangat disarankan untuk production)
 proxy:
@@ -67,6 +67,15 @@ limits:
     request_delay_seconds: 2
 
 storage:
-  type: "sqlite" # sqlite / json / csv
-  db_path: "./data/cache/scraper.db"
+  type: "postgresql" # sqlite / postgresql
+  db_path: "./data/cache/scraper.db" # local SQLite fallback/cache
   export_format: "json" # json / csv
+  
+  # PostgreSQL Configuration
+  postgresql:
+    host: "localhost"
+    port: 5432
+    database: "social_sentiment"
+    user: "postgres"
+    password: "your_password"
+

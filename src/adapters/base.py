@@ -20,7 +20,7 @@ console = Console()
 
 # Task types yang TIDAK boleh di-dedup by URL
 # karena data konten selalu unik meskipun URL sama
-SKIP_DEDUP_FOR_TASK_TYPES = {"article", "comments", "tweet_replies", "post_comments"}
+SKIP_DEDUP_FOR_TASK_TYPES = {"article", "comments", "tweet_replies", "post_comments", "hashtag", "profile_posts"}
 
 
 class BaseAdapter(ABC):

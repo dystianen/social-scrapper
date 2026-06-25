@@ -40,20 +40,23 @@ async def run_instagram(orchestrator, config):
         console.print("[red]✗ Isi akun Instagram di config/settings.yml dulu[/red]")
         return
 
+    # ── INPUT PARAMETERS FIRST ──
+    console.print("\n[bold]Step 1: Parameter Pencarian[/bold]")
+    hashtag = Prompt.ask("Hashtag", default="solusiku").replace("#", "")
+    max_posts = int(Prompt.ask("Berapa post", default="20"))
+
     # ── LOGIN ──
-    console.print("\n[bold]Step 1: Login Instagram[/bold]")
+    console.print("\n[bold]Step 2: Login Instagram[/bold]")
     acc = accounts[0]
     ig = orchestrator.adapters["instagram"]
 
-    success = await ig.login(acc["username"], acc["password"], acc.get("email", ""))
+    success = await ig.login(acc["username"], acc["password"], acc.get("email", ""), close_session=False)
     if not success:
         console.print("[red]✗ Login gagal, stop[/red]")
         return
 
     # ── SCRAPE HASHTAG ──
-    console.print("\n[bold]Step 2: Scrape hashtag #solusiku[/bold]")
-    hashtag = Prompt.ask("Hashtag", default="solusiku")
-    max_posts = int(Prompt.ask("Berapa post", default="20"))
+    console.print(f"\n[bold]Step 3: Scrape hashtag #{hashtag}[/bold]")
 
     tasks = [ScrapingTask(
         platform="instagram",
@@ -79,37 +82,130 @@ async def run_instagram(orchestrator, config):
     if all_data:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        rows = []
+        # JSON formatting matching scraped_items and comments database schema
+        from src.core.keyword_filter import KeywordFilter
+        kf = KeywordFilter("config/news_sources.yml")
+        
+        task_id = tasks[0].id if tasks else ""
+        formatted_json = []
+        flat_rows = []
+        
         for post in all_data:
-            base = {
-                "post_url": post.get("post_url", ""),
-                "post_username": post.get("username", ""),
-                "caption": post.get("caption", "")[:200],
-                "post_timestamp": post.get("timestamp", ""),
+            caption = post.get("caption", "")
+            
+            # Hitung skor relevansi & matched keywords
+            dummy = {"title": "", "content": caption}
+            is_rel, relevance_score, matched_w, matched_k = kf.is_relevant(dummy)
+            matched_keywords = matched_w + matched_k
+            
+            word_count = len(caption.split()) if caption else 0
+            post_id = post.get("post_id", "")
+            url = post.get("post_url", "")
+            username = post.get("username", "")
+            raw_date = post.get("timestamp", "")
+            
+            # scraped_items fields representation
+            item = {
+                "platform": "instagram",
+                "source": "instagram",
+                "item_type": "ig_post",
+                "external_id": post_id,
+                "url": url,
+                "username": username,
+                "title": None,
+                "content": caption,
+                "description": None,
+                "author": None,
+                "published_at": raw_date,
+                "raw_date_str": raw_date,
+                "likes": 0,
+                "shares": 0,
+                "comments_count": len(post.get("comments", [])),
+                "word_count": word_count,
+                "relevance_score": relevance_score,
+                "matched_keywords": matched_keywords,
+                "extra": {},
+                "scraped_at": datetime.now().isoformat() + "Z",
+                "task_id": task_id,
             }
-            if post.get("comments"):
-                for c in post["comments"]:
-                    rows.append({
-                        **base,
-                        "commenter": c.get("username", ""),
-                        "comment": c.get("text", ""),
-                        "comment_timestamp": c.get("timestamp", ""),
+            
+            # comments representation
+            comments_list = []
+            for c in post.get("comments", []):
+                c_user = c.get("username", "")
+                c_text = c.get("text", "")
+                c_time = c.get("timestamp", "")
+                
+                comment_row = {
+                    "platform": "instagram",
+                    "username": c_user,
+                    "text": c_text,
+                    "published_at": c_time,
+                    "raw_date_str": c_time,
+                    "likes": 0,
+                    "reply_to_id": None,
+                    "extra": {},
+                    "scraped_at": datetime.now().isoformat() + "Z"
+                }
+                comments_list.append(comment_row)
+                
+            item["comments"] = comments_list
+            formatted_json.append(item)
+            
+            # Flat rows for Excel/CSV export matching both schemas
+            base_flat = {
+                "platform": item["platform"],
+                "source": item["source"],
+                "item_type": item["item_type"],
+                "external_id": item["external_id"],
+                "url": item["url"],
+                "username": item["username"],
+                "title": item["title"],
+                "content": item["content"],
+                "description": item["description"],
+                "author": item["author"],
+                "published_at": item["published_at"],
+                "raw_date_str": item["raw_date_str"],
+                "likes": item["likes"],
+                "shares": item["shares"],
+                "comments_count": item["comments_count"],
+                "word_count": item["word_count"],
+                "relevance_score": item["relevance_score"],
+                "matched_keywords": ",".join(item["matched_keywords"]) if item["matched_keywords"] else "",
+            }
+            
+            if comments_list:
+                for c in comments_list:
+                    flat_rows.append({
+                        **base_flat,
+                        "comment_username": c["username"],
+                        "comment_text": c["text"],
+                        "comment_published_at": c["published_at"],
+                        "comment_raw_date_str": c["raw_date_str"],
+                        "comment_likes": c["likes"],
                     })
             else:
-                rows.append(base)
-
-        json_path = orchestrator.storage.export_json(rows, f"ig_{hashtag}_{timestamp}.json")
-        csv_path = orchestrator.storage.export_csv(rows, f"ig_{hashtag}_{timestamp}.csv")
-
+                flat_rows.append({
+                    **base_flat,
+                    "comment_username": None,
+                    "comment_text": None,
+                    "comment_published_at": None,
+                    "comment_raw_date_str": None,
+                    "comment_likes": None,
+                })
+                
+        json_path = orchestrator.storage.export_json(formatted_json, f"ig_{hashtag}_{timestamp}.json")
+        csv_path = orchestrator.storage.export_csv(flat_rows, f"ig_{hashtag}_{timestamp}.csv")
+ 
         total_posts = len(all_data)
         total_comments = sum(len(p.get("comments", [])) for p in all_data)
-
+ 
         console.print("\n" + "=" * 60)
         console.print(f"[bold green]✅ #{hashtag} — SELESAI[/bold green]")
         console.print("=" * 60)
         console.print(f"  Post        : {total_posts}")
         console.print(f"  Komentar    : {total_comments}")
-        console.print(f"  Total baris : {len(rows)}")
+        console.print(f"  Total baris : {len(flat_rows)}")
         console.print(f"\n  📁 {json_path}")
         console.print(f"  📁 {csv_path}")
         console.print("=" * 60)
